@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -112,9 +113,9 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => {
     res.send(`
         <div style="font-family: sans-serif; padding: 50px; text-align: center;">
-            <h1 style="color: #2563eb;">🚀 Backend Express (Local MySQL) Active!</h1>
+            <h1 style="color: #2563eb;">🚀 Backend Express (MongoDB) Active!</h1>
             <p>Server running on port 5001.</p>
-            <p>Database: localhost (XAMPP)</p>
+            <p>Database: MongoDB Atlas / Local</p>
             <p>Status: <span style="color: green; font-weight: bold;">Connected ✅</span></p>
         </div>
     `);
@@ -122,7 +123,7 @@ app.get('/', (req, res) => {
 
 // Status route
 app.get('/api/status', (req, res) => {
-    res.json({ status: 'Server is running', database: 'mysql', timestamp: new Date() });
+    res.json({ status: 'Server is running', database: 'mongodb', timestamp: new Date() });
 });
 
 // Test DB route
