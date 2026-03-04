@@ -78,7 +78,27 @@ if (process.env.CLOUDINARY_CLOUD_NAME) {
 const upload = multer({ storage });
 
 const app = express();
-app.use(cors());
+// CORS configuration
+const allowedOrigins = [
+    process.env.FRONTEND_USER_URL,
+    process.env.FRONTEND_ADMIN_URL,
+    'http://localhost:3000', // For local development
+    'http://localhost:5173'  // For Vite local development
+];
+
+app.use(cors({
+    origin: function (origin, callback) {
+        // allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) === -1) {
+            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    },
+    credentials: true
+}));
+
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
