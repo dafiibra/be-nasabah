@@ -116,11 +116,22 @@ app.use(cors({
     origin: function (origin, callback) {
         // allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) === -1) {
-            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-            return callback(new Error(msg), false);
+
+        // Normalize URLs for comparison (trim and remove trailing slash)
+        const normalize = (url) => url.trim().replace(/\/$/, '');
+        const cleanOrigin = normalize(origin);
+        const cleanAllowed = allowedOrigins
+            .filter(o => o && typeof o === 'string')
+            .map(normalize);
+
+        if (cleanAllowed.includes(cleanOrigin)) {
+            callback(null, true);
+        } else {
+            console.log(`[CORS] Rejected origin: ${origin}`);
+            // Do not pass an Error object, as it triggers a 500 response.
+            // Just pass null, false to indicate the origin is not allowed.
+            callback(null, false);
         }
-        return callback(null, true);
     },
     credentials: true
 }));
@@ -202,7 +213,11 @@ app.post('/api/applications', upload.fields([
         const getFilePath = (fileField) => {
             if (!req.files[fileField]) return null;
             const file = req.files[fileField][0];
-            return process.env.CLOUDINARY_CLOUD_NAME ? file.path : file.path.replace(/\\/g, '/');
+            // If using Cloudinary, return the URL. Otherwise, return just the filename.
+            if (process.env.CLOUDINARY_CLOUD_NAME) return file.path;
+
+            // For local/tmp storage, we store only the filename to make it relative to /uploads
+            return path.basename(file.path);
         };
 
         const ktpPath = getFilePath('ktpImage');
@@ -373,16 +388,26 @@ app.get('/api/admin/applications/:id', async (req, res) => {
         const appData = await Application.findById(req.params.id).lean();
         if (appData) {
             const fmt = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }) : null;
-            const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:5001`;
+            const BACKEND_URL = process.env.BACKEND_URL || `https://${process.env.VERCEL_URL}` || `http://localhost:5001`;
+
+            const getImageUrl = (path) => {
+                if (!path) return null;
+                if (path.startsWith('http')) return path;
+                // If it's a relative path (just filename), prefix with the backend uploads URL
+                // Ensure no double slashes
+                const baseUrl = BACKEND_URL.replace(/\/$/, '');
+                return `${baseUrl}/uploads/${path}`;
+            };
+
             res.json({
                 ...appData,
                 id: appData._id.toString(),
                 name: appData.full_name,
                 paymentStatus: appData.payment_status,
                 size: appData.box_size,
-                ktpImage: appData.ktp_path ? `${BACKEND_URL}/${appData.ktp_path}` : null,
-                passbookImage: appData.passbook_path ? `${BACKEND_URL}/${appData.passbook_path}` : null,
-                signatureImage: appData.signature_path ? `${BACKEND_URL}/${appData.signature_path}` : null,
+                ktpImage: getImageUrl(appData.ktp_path),
+                passbookImage: getImageUrl(appData.passbook_path),
+                signatureImage: getImageUrl(appData.signature_path),
                 startDate: fmt(appData.start_date),
                 endDate: fmt(appData.jatuh_temponext),
                 paymentDueDate: appData.jatuh_temponext ? fmt(appData.jatuh_temponext) : null,
