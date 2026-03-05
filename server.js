@@ -256,9 +256,13 @@ app.post('/api/applications', upload.fields([
             signature_path: signaturePath
         });
 
-        sendTrackingCodeEmail(email, trackingCode, {
-            fullName, nik, phone, address, accountNumber, accountType, creditCardType, boxSize
-        }).catch(err => console.error('[Mailer] Email failed:', err.message));
+        try {
+            await sendTrackingCodeEmail(email, trackingCode, {
+                fullName, nik, phone, address, accountNumber, accountType, creditCardType, boxSize
+            });
+        } catch (err) {
+            console.error('[Mailer] Initial email failed:', err.message);
+        }
 
         res.status(201).json({ success: true, trackingCode });
     } catch (error) {
@@ -468,8 +472,11 @@ app.patch('/api/admin/applications/:id', async (req, res) => {
         if (status === 'active' || updateData.status === 'active') {
             const appl = await Application.findById(req.params.id).lean();
             const fmt = d => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }) : null;
-            sendApprovalEmail(appl.email, appl.full_name, appl.tracking_code, appl.box_size, fmt(appl.start_date), fmt(appl.jatuh_temponext))
-                .catch(e => console.error('Approval email failed:', e.message));
+            try {
+                await sendApprovalEmail(appl.email, appl.full_name, appl.tracking_code, appl.box_size, fmt(appl.start_date), fmt(appl.jatuh_temponext));
+            } catch (e) {
+                console.error('Approval email failed:', e.message);
+            }
         }
 
         res.json({ success: true });
