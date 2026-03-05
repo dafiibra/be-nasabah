@@ -1,17 +1,18 @@
 import express from 'express';
-import cors from 'cors';
 import mongoose from 'mongoose';
+import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
 import { v2 as cloudinary } from 'cloudinary';
 import { CloudinaryStorage } from 'multer-storage-cloudinary';
-import './db.js';
+import { connectionPromise } from './db.js';
 import Admin from './models/Admin.js';
 import Application from './models/Application.js';
 import BoxInventory from './models/BoxInventory.js';
 import { sendTrackingCodeEmail, sendPaymentReminderEmail, sendApprovalEmail } from './mailer.js';
+import bcrypt from 'bcrypt';
 
 dotenv.config();
 
@@ -24,6 +25,14 @@ if (!fs.existsSync(uploadDir)) {
 // Initialize Database Tables (MongoDB Seeding)
 const initDB = async () => {
     try {
+        // Wait for database connection to be established before running queries
+        await connectionPromise;
+
+        if (mongoose.connection.readyState !== 1) {
+            console.warn('⚠️ Skipping DB Initialization: Database not connected.');
+            return;
+        }
+
         const count = await BoxInventory.countDocuments();
         if (count === 0) {
             const sizes = ['30', '40', '50'];
@@ -39,9 +48,21 @@ const initDB = async () => {
         if (adminCount === 0) {
             await Admin.create({ username: 'admin', password: 'password' });
             console.log('Default admin created.');
+        } else {
+            const admin = await Admin.findOne({ username: 'admin' });
+            if (admin && admin.password && !admin.password.startsWith('$2')) {
+                console.log(`[initDB] Found unhashed admin: ${admin.username} (ID: ${admin._id})`);
+                console.log(`[initDB] Database: ${mongoose.connection.name}`);
+                const salt = await bcrypt.genSalt(10);
+                admin.password = await bcrypt.hash('password', salt);
+                await admin.save();
+                console.log('[initDB] Admin password migrated to hashed version.');
+            } else if (admin) {
+                console.log(`[initDB] Admin ${admin.username} (ID: ${admin._id}) already hashed or has no password.`);
+            }
         }
     } catch (err) {
-        console.error('Database Initialization Error:', err);
+        console.error('Database Initialization Error:', err.message || err);
     }
 };
 initDB();
@@ -57,9 +78,7 @@ if (process.env.CLOUDINARY_CLOUD_NAME) {
 }
 
 // Multer storage configuration - Local Disk or Cloudinary
-const isVercel = process.env.VERCEL === '1';
-const tempDir = isVercel ? '/tmp' : 'uploads/';
-
+let storage;
 if (process.env.CLOUDINARY_CLOUD_NAME) {
     storage = new CloudinaryStorage({
         cloudinary: cloudinary,
@@ -71,7 +90,7 @@ if (process.env.CLOUDINARY_CLOUD_NAME) {
 } else {
     storage = multer.diskStorage({
         destination: (req, file, cb) => {
-            cb(null, tempDir);
+            cb(null, 'uploads/');
         },
         filename: (req, file, cb) => {
             cb(null, Date.now() + '-' + file.originalname);
@@ -81,7 +100,27 @@ if (process.env.CLOUDINARY_CLOUD_NAME) {
 const upload = multer({ storage });
 
 const app = express();
-app.use(cors());
+// CORS configuration
+const allowedOrigins = [
+    process.env.FRONTEND_USER_URL,
+    process.env.FRONTEND_ADMIN_URL,
+    'http://localhost:3000', // For local development
+    'http://localhost:5173'  // For Vite local development
+];
+
+app.use(cors({
+    origin: function (origin, callback) {
+        // allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) === -1) {
+            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    },
+    credentials: true
+}));
+
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
@@ -95,9 +134,9 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => {
     res.send(`
         <div style="font-family: sans-serif; padding: 50px; text-align: center;">
-            <h1 style="color: #2563eb;">🚀 Backend Express (Local MySQL) Active!</h1>
+            <h1 style="color: #2563eb;">🚀 Backend Express (MongoDB) Active!</h1>
             <p>Server running on port 5001.</p>
-            <p>Database: localhost (XAMPP)</p>
+            <p>Database: MongoDB Atlas / Local</p>
             <p>Status: <span style="color: green; font-weight: bold;">Connected ✅</span></p>
         </div>
     `);
@@ -105,7 +144,7 @@ app.get('/', (req, res) => {
 
 // Status route
 app.get('/api/status', (req, res) => {
-    res.json({ status: 'Server is running', database: 'mysql', timestamp: new Date() });
+    res.json({ status: 'Server is running', database: 'mongodb', timestamp: new Date() });
 });
 
 // Test DB route
@@ -127,8 +166,8 @@ app.get('/api/test-db', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {
-        const admin = await Admin.findOne({ username, password });
-        if (admin) {
+        const admin = await Admin.findOne({ username });
+        if (admin && await bcrypt.compare(password, admin.password)) {
             res.json({
                 message: 'Login successful',
                 token: 'mock-jwt-token',
@@ -197,12 +236,7 @@ app.post('/api/applications', upload.fields([
         res.status(201).json({ success: true, trackingCode });
     } catch (error) {
         console.error('Application Error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to submit application',
-            error: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-        });
+        res.status(500).json({ message: 'Failed to submit application', error: error.message });
     }
 });
 
