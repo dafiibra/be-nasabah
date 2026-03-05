@@ -27,23 +27,17 @@ if (!fs.existsSync(uploadDir)) {
 }
 
 // Initialize Database Tables (MongoDB Seeding)
-let isDbInitialzed = false;
 const initDB = async () => {
-    if (isDbInitialzed) return;
     try {
         console.log('[initDB] Waiting for database connection...');
-        // Wait for database connection with a local timeout
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('initDB Timeout (12s)')), 12000));
-        await Promise.race([connectionPromise, timeoutPromise]);
+        await connectionPromise;
 
         if (mongoose.connection.readyState !== 1) {
-            console.warn(`⚠️ [initDB] DB state is ${mongoose.connection.readyState}, skipping seeds.`);
+            console.warn('⚠️ [initDB] Database not connected. Skipping seeds.');
             return;
         }
-        console.log(`[initDB] Connected to database: ${mongoose.connection.name}`);
 
-        const count = await BoxInventory.countDocuments().maxTimeMS(2000);
-        // ... (rest of seeding remains same)
+        const count = await BoxInventory.countDocuments();
         if (count === 0) {
             const sizes = ['30', '40', '50'];
             for (const size of sizes) {
@@ -52,24 +46,16 @@ const initDB = async () => {
             console.log('Box inventory capacity seeded.');
         }
 
-        const adminCount = await Admin.countDocuments().maxTimeMS(2000);
+        const adminCount = await Admin.countDocuments();
         if (adminCount === 0) {
             await Admin.create({ username: 'admin', password: 'password' });
             console.log('Default admin created.');
-        } else {
-            console.log('[initDB] Admin check completed.');
         }
-        isDbInitialzed = true;
     } catch (err) {
-        console.error('Database Initialization Error:', err.message || err);
+        console.error('Database Initialization Error:', err.message);
     }
 };
-// Trigger initDB but don't strictly await it at top level if on Vercel
-if (process.env.VERCEL) {
-    initDB().catch(e => console.error('[initDB] Silent failure:', e.message));
-} else {
-    initDB();
-}
+initDB();
 
 // Configure Cloudinary
 if (process.env.CLOUDINARY_CLOUD_NAME) {
@@ -180,40 +166,22 @@ app.get('/api/test-db', async (req, res) => {
 // Login route
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
-    console.log(`[Login] Attempt for username: ${username}`);
+    console.log(`[Login] Attempt: ${username}`);
     try {
-        if (mongoose.connection.readyState !== 1) {
-            console.log(`[Login] DB not ready (state: ${mongoose.connection.readyState}), waiting up to 5s...`);
-            const readyPromise = new Promise((resolve) => {
-                const check = () => {
-                    if (mongoose.connection.readyState === 1) resolve(true);
-                    else setTimeout(check, 500);
-                };
-                check();
-            });
-            const timeout = new Promise((resolve) => setTimeout(() => resolve(false), 5000));
-            const isReady = await Promise.race([readyPromise, timeout]);
-            if (!isReady) {
-                console.error('[Login] DB connection timeout in login route');
-                return res.status(503).json({ message: 'Database connection unstable. Please try again.' });
-            }
-        }
-
-        const admin = await Admin.findOne({ username }).maxTimeMS(5000);
+        const admin = await Admin.findOne({ username });
         if (admin && await bcrypt.compare(password, admin.password)) {
-            console.log(`[Login] Success for ${username}`);
+            console.log(`[Login] Success: ${username}`);
             res.json({
                 message: 'Login successful',
                 token: 'mock-jwt-token',
                 user: { id: admin._id, username: admin.username }
             });
         } else {
-            console.log(`[Login] Failed: Invalid credentials for ${username}`);
             res.status(401).json({ message: 'Invalid username or password' });
         }
     } catch (error) {
-        console.error('Login Error:', error.message || error);
-        res.status(500).json({ message: 'Internal server error', details: error.message });
+        console.error('Login Error:', error.message);
+        res.status(500).json({ message: 'Internal server error' });
     }
 });
 
