@@ -7,11 +7,12 @@ import fs from 'fs';
 import multer from 'multer';
 import { v2 as cloudinary } from 'cloudinary';
 import { CloudinaryStorage } from 'multer-storage-cloudinary';
-import './db.js';
+import { connectionPromise } from './db.js';
 import Admin from './models/Admin.js';
 import Application from './models/Application.js';
 import BoxInventory from './models/BoxInventory.js';
 import { sendTrackingCodeEmail, sendPaymentReminderEmail, sendApprovalEmail } from './mailer.js';
+import bcrypt from 'bcrypt';
 
 dotenv.config();
 
@@ -24,6 +25,14 @@ if (!fs.existsSync(uploadDir)) {
 // Initialize Database Tables (MongoDB Seeding)
 const initDB = async () => {
     try {
+        // Wait for database connection to be established before running queries
+        await connectionPromise;
+
+        if (mongoose.connection.readyState !== 1) {
+            console.warn('⚠️ Skipping DB Initialization: Database not connected.');
+            return;
+        }
+
         const count = await BoxInventory.countDocuments();
         if (count === 0) {
             const sizes = ['30', '40', '50'];
@@ -39,9 +48,16 @@ const initDB = async () => {
         if (adminCount === 0) {
             await Admin.create({ username: 'admin', password: 'password' });
             console.log('Default admin created.');
+        } else {
+            const admin = await Admin.findOne({ username: 'admin' });
+            if (admin && admin.password && !admin.password.startsWith('$2')) {
+                admin.password = 'password';
+                await admin.save();
+                console.log('Admin password migrated to hashed version.');
+            }
         }
     } catch (err) {
-        console.error('Database Initialization Error:', err);
+        console.error('Database Initialization Error:', err.message || err);
     }
 };
 initDB();
@@ -145,8 +161,8 @@ app.get('/api/test-db', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {
-        const admin = await Admin.findOne({ username, password });
-        if (admin) {
+        const admin = await Admin.findOne({ username });
+        if (admin && await bcrypt.compare(password, admin.password)) {
             res.json({
                 message: 'Login successful',
                 token: 'mock-jwt-token',
