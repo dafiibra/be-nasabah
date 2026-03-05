@@ -51,9 +51,14 @@ const initDB = async () => {
         } else {
             const admin = await Admin.findOne({ username: 'admin' });
             if (admin && admin.password && !admin.password.startsWith('$2')) {
-                admin.password = 'password';
+                console.log(`[initDB] Found unhashed admin: ${admin.username} (ID: ${admin._id})`);
+                console.log(`[initDB] Database: ${mongoose.connection.name}`);
+                const salt = await bcrypt.genSalt(10);
+                admin.password = await bcrypt.hash('password', salt);
                 await admin.save();
-                console.log('Admin password migrated to hashed version.');
+                console.log('[initDB] Admin password migrated to hashed version.');
+            } else if (admin) {
+                console.log(`[initDB] Admin ${admin.username} (ID: ${admin._id}) already hashed or has no password.`);
             }
         }
     } catch (err) {
