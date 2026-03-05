@@ -27,49 +27,49 @@ if (!fs.existsSync(uploadDir)) {
 }
 
 // Initialize Database Tables (MongoDB Seeding)
+let isDbInitialzed = false;
 const initDB = async () => {
+    if (isDbInitialzed) return;
     try {
-        // Wait for database connection to be established before running queries
-        await connectionPromise;
+        console.log('[initDB] Waiting for database connection...');
+        // Wait for database connection with a local timeout to avoid hanging the function
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('DB Connection Timeout')), 8000));
+        await Promise.race([connectionPromise, timeoutPromise]);
 
         if (mongoose.connection.readyState !== 1) {
-            console.warn('⚠️ Skipping DB Initialization: Database not connected.');
+            console.warn('⚠️ [initDB] Skipping DB Initialization: Database not connected.');
             return;
         }
+        console.log(`[initDB] Connected to database: ${mongoose.connection.name}`);
 
-        const count = await BoxInventory.countDocuments();
+        const count = await BoxInventory.countDocuments().maxTimeMS(2000);
+        // ... (rest of seeding remains same)
         if (count === 0) {
             const sizes = ['30', '40', '50'];
             for (const size of sizes) {
                 await BoxInventory.create({ box_size: size, total_slots: 1700 });
             }
-            console.log('Box inventory capacity seeded (Total 5100).');
-        } else {
-            console.log('Box inventory already exists.');
+            console.log('Box inventory capacity seeded.');
         }
 
-        const adminCount = await Admin.countDocuments();
+        const adminCount = await Admin.countDocuments().maxTimeMS(2000);
         if (adminCount === 0) {
             await Admin.create({ username: 'admin', password: 'password' });
             console.log('Default admin created.');
         } else {
-            const admin = await Admin.findOne({ username: 'admin' });
-            if (admin && admin.password && !admin.password.startsWith('$2')) {
-                console.log(`[initDB] Found unhashed admin: ${admin.username} (ID: ${admin._id})`);
-                console.log(`[initDB] Database: ${mongoose.connection.name}`);
-                const salt = await bcrypt.genSalt(10);
-                admin.password = await bcrypt.hash('password', salt);
-                await admin.save();
-                console.log('[initDB] Admin password migrated to hashed version.');
-            } else if (admin) {
-                console.log(`[initDB] Admin ${admin.username} (ID: ${admin._id}) already hashed or has no password.`);
-            }
+            console.log('[initDB] Admin check completed.');
         }
+        isDbInitialzed = true;
     } catch (err) {
         console.error('Database Initialization Error:', err.message || err);
     }
 };
-initDB();
+// Trigger initDB but don't strictly await it at top level if on Vercel
+if (process.env.VERCEL) {
+    initDB().catch(e => console.error('[initDB] Silent failure:', e.message));
+} else {
+    initDB();
+}
 
 // Configure Cloudinary
 if (process.env.CLOUDINARY_CLOUD_NAME) {
@@ -180,20 +180,28 @@ app.get('/api/test-db', async (req, res) => {
 // Login route
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
+    console.log(`[Login] Attempt for username: ${username}`);
     try {
-        const admin = await Admin.findOne({ username });
+        if (mongoose.connection.readyState !== 1) {
+            console.log('[Login] DB not ready, waiting...');
+            await connectionPromise;
+        }
+
+        const admin = await Admin.findOne({ username }).maxTimeMS(5000);
         if (admin && await bcrypt.compare(password, admin.password)) {
+            console.log(`[Login] Success for ${username}`);
             res.json({
                 message: 'Login successful',
                 token: 'mock-jwt-token',
                 user: { id: admin._id, username: admin.username }
             });
         } else {
+            console.log(`[Login] Failed: Invalid credentials for ${username}`);
             res.status(401).json({ message: 'Invalid username or password' });
         }
     } catch (error) {
-        console.error('Login Error:', error);
-        res.status(500).json({ message: 'Internal server error' });
+        console.error('Login Error:', error.message || error);
+        res.status(500).json({ message: 'Internal server error', details: error.message });
     }
 });
 
