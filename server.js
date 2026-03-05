@@ -32,12 +32,12 @@ const initDB = async () => {
     if (isDbInitialzed) return;
     try {
         console.log('[initDB] Waiting for database connection...');
-        // Wait for database connection with a local timeout to avoid hanging the function
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('DB Connection Timeout')), 8000));
+        // Wait for database connection with a local timeout
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('initDB Timeout (12s)')), 12000));
         await Promise.race([connectionPromise, timeoutPromise]);
 
         if (mongoose.connection.readyState !== 1) {
-            console.warn('⚠️ [initDB] Skipping DB Initialization: Database not connected.');
+            console.warn(`⚠️ [initDB] DB state is ${mongoose.connection.readyState}, skipping seeds.`);
             return;
         }
         console.log(`[initDB] Connected to database: ${mongoose.connection.name}`);
@@ -183,8 +183,20 @@ app.post('/api/login', async (req, res) => {
     console.log(`[Login] Attempt for username: ${username}`);
     try {
         if (mongoose.connection.readyState !== 1) {
-            console.log('[Login] DB not ready, waiting...');
-            await connectionPromise;
+            console.log(`[Login] DB not ready (state: ${mongoose.connection.readyState}), waiting up to 5s...`);
+            const readyPromise = new Promise((resolve) => {
+                const check = () => {
+                    if (mongoose.connection.readyState === 1) resolve(true);
+                    else setTimeout(check, 500);
+                };
+                check();
+            });
+            const timeout = new Promise((resolve) => setTimeout(() => resolve(false), 5000));
+            const isReady = await Promise.race([readyPromise, timeout]);
+            if (!isReady) {
+                console.error('[Login] DB connection timeout in login route');
+                return res.status(503).json({ message: 'Database connection unstable. Please try again.' });
+            }
         }
 
         const admin = await Admin.findOne({ username }).maxTimeMS(5000);
